@@ -1,0 +1,196 @@
+--[[
+运行期配置模板
+
+用法：把本文件复制成同目录下的 config.lua，再填上自己的值。
+config.lua 里是明文凭据（Telegram token / Chat ID / WiFi 密码），已被 .gitignore 排除，不入版本库。
+
+存储后端自动降级（启动日志会打出实际用哪个、每个为什么不可用）：
+  fskv > fdb > memory（两个库都没有就只放内存，重启回到默认值）
+
+对外接口（全局名 config，由 main.lua 先创建）：
+  init() 启动时调一次 / get(key) 读一项 / all() 整份（引用，别改）/
+  set(tbl) 合并写入并落盘，返回 是否成功, 提示文字 / reset() 恢复默认 / backend() 后端名
+
+配置项：
+  wifi {{name,password},...} 按顺序尝试，只支持 2.4G / token、chat 是 Telegram 的 /
+  tag 指令口令，拼成 C<tag>REBOOT、C<tag>SEND 才有用 / pushMax 重试次数 / pushGap 重试间隔ms
+]]
+
+local config = {}
+
+--KV 库里存的键名（整份配置转成 JSON 存成一个字符串）
+local KV_KEY = "smsf_cfg"
+
+--出厂默认值：首次上电（KV 库是空的）时用这些，之后一律以 KV 库里的为准
+--下面全是占位值，必须换成自己的，否则设备连不上网、也推不出去
+local DEFAULTS = {
+    wifi = {
+        {name = "你的WiFi名-2.4G", password = "你的WiFi密码"}
+        -- 多个 wifi 继续往下加，会按顺序尝试
+    },
+    token = "123456789:REPLACE_ME_从BotFather申请的token",
+    chat = "REPLACE_ME_你的ChatID",
+    tag = "CHANGE_ME",
+    pushMax = 10,
+    pushGap = 5000,
+}
+
+local backend, kvlib = "memory", nil
+local cfg = {}
+
+local function deepcopy(v)
+    if type(v) ~= "table" then return v end
+    local r = {}
+    for k, vv in pairs(v) do r[k] = deepcopy(vv) end
+    return r
+end
+
+--取一个库：先看全局（LuatOS 的核心库一般直接挂成全局），再去 require 兜底
+local function getlib(name)
+    local g = rawget(_G, name)
+    if type(g) == "table" then return g end
+    local ok, lib = pcall(require, name)
+    if ok and type(lib) == "table" then return lib end
+    return nil
+end
+
+--探测可用存储后端：fskv 优先，其次 fdb。
+--失败原因要分开打：否则日志里只有一句 backend memory，分不清是「固件根本没编这个库」
+--（要去云编译勾组件重刷）还是「编了但 init 失败」
+local function probe_backend()
+    for _, name in ipairs({"fskv", "fdb"}) do
+        local lib = getlib(name)
+        if not lib then
+            log.warn("cfg", name, "lib not in firmware")
+        elseif not (lib.init and lib.set and lib.get) then
+            log.warn("cfg", name, "lib found but api incomplete")
+        else
+            local ok, r = pcall(lib.init)
+            if ok and r ~= false then
+                backend, kvlib = name, lib
+                return
+            end
+            log.warn("cfg", name, "init failed", tostring(r))
+        end
+    end
+    backend, kvlib = "memory", nil
+end
+
+--清洗 WiFi 列表：丢掉没有名字的项，密码统一成字符串
+local function clean_wifi(list)
+    local out = {}
+    if type(list) == "table" then
+        for _, w in ipairs(list) do
+            if type(w) == "table" and type(w.name) == "string" and #w.name > 0 then
+                out[#out + 1] = {name = w.name, password = tostring(w.password or "")}
+            end
+        end
+    end
+    return out
+end
+
+--数值项做范围夹紧，避免网页上填错把设备搞死（比如重试 9999 次）
+local function clamp_nums()
+    cfg.pushMax = math.floor(math.min(math.max(tonumber(cfg.pushMax) or 10, 1), 30))
+    cfg.pushGap = math.floor(math.min(math.max(tonumber(cfg.pushGap) or 5000, 500), 60000))
+    --口令只留字母数字下划线：notify 拿它拼 Lua 匹配模式（混进 % 会直接报错）；
+    --留空则 "C"+""+"REBOOT" 等于 CREBOOT，任何人发这条就能重启设备
+    cfg.tag = tostring(cfg.tag or ""):gsub("[^%w_]", "")
+    if #cfg.tag == 0 then cfg.tag = "ziw" end
+end
+
+--把整份配置落盘；没有 KV 后端时只留在内存里（会告警）
+local function persist()
+    if not kvlib then
+        log.warn("cfg", "no kv backend (" .. backend .. "), config lost on reboot")
+        return false
+    end
+    local ok, s = pcall(json.encode, cfg)
+    if not ok then
+        log.error("cfg", "encode failed")
+        return false
+    end
+    local rok, r = pcall(kvlib.set, KV_KEY, s)
+    if not rok or r == false then
+        log.error("cfg", "kv save failed", tostring(r))
+        return false
+    end
+    return true
+end
+
+function config.init()
+    probe_backend()
+    cfg = deepcopy(DEFAULTS)
+
+    if kvlib then
+        local ok, raw = pcall(kvlib.get, KV_KEY)
+        --存进去的一直是 JSON 字符串；解不出来就退回默认值（比如换固件后数据格式变了）
+        if ok and type(raw) == "string" and #raw > 0 then
+            local dok, t = pcall(json.decode, raw)
+            if dok and type(t) == "table" then
+                for k, v in pairs(t) do
+                    if DEFAULTS[k] ~= nil then cfg[k] = v end
+                end
+            else
+                log.warn("cfg", "kv data broken, use defaults")
+            end
+        end
+    end
+
+    cfg.wifi = clean_wifi(cfg.wifi)
+    clamp_nums()
+    log.info("cfg", "backend", backend, "wifi", #cfg.wifi, "tag", cfg.tag)
+    return true
+end
+
+function config.get(key)
+    return cfg[key]
+end
+
+function config.all()
+    return cfg
+end
+
+function config.backend()
+    return backend
+end
+
+function config.set(t)
+    if type(t) ~= "table" then return false end
+    local hint = nil
+    for k, v in pairs(t) do
+        --只接受已知配置项，别的键一律忽略（防止面板传脏数据把配置撑坏）
+        if DEFAULTS[k] ~= nil then
+            if k == "wifi" then
+                --WiFi 列表为空会让设备下次开机连不上网、陷进重启循环，只能重烧脚本救回来，
+                --所以空列表一律拒绝
+                local w = clean_wifi(v)
+                if #w > 0 then
+                    cfg.wifi = w
+                else
+                    hint = "WiFi 列表不能为空，已保留原来的"
+                    log.warn("cfg", "empty wifi list rejected")
+                end
+            elseif type(v) == "table" then
+                --其余项都应该是标量，table 直接丢掉
+                log.warn("cfg", "ignore table value for", k)
+            else
+                cfg[k] = v
+            end
+        end
+    end
+    clamp_nums()
+    local ok = persist()
+    log.info("cfg", "saved", ok, "wifi", #cfg.wifi, "tag", cfg.tag)
+    return ok, hint
+end
+
+function config.reset()
+    cfg = deepcopy(DEFAULTS)
+    cfg.wifi = clean_wifi(cfg.wifi)
+    clamp_nums()
+    log.info("cfg", "reset to defaults")
+    return persist()
+end
+
+return config

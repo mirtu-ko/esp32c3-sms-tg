@@ -1,0 +1,4 @@
+.workbuddy/*
+preview/*
+# 本机真实凭据（Telegram token / Chat ID / WiFi 密码）不进版本库；文件本身留在工作区，下载脚本照常使用
+script/config.lua
