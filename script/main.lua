@@ -6,7 +6,7 @@
 ]]
 
 -- LuaTools需要PROJECT和VERSION这两个信息
-PROJECT = "sms_forwarding"
+PROJECT = "esp32c3-sms-tg"
 VERSION = "1.1.0"
 
 --调试日志开关：true=额外输出串口原始报文、AT 收发细节，排查问题才打开；日常看日志保持 false

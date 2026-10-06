@@ -1,4 +1,4 @@
-# 短信转发器（ESP32C3 + Air780E · LuatOS）
+# esp32c3-sms-tg · 短信转发器（ESP32C3 + Air780E · LuatOS）
 
 基于 [chenxuuu/sms_forwarding](https://github.com/chenxuuu/sms_forwarding) 改造，硬件方案与接线沿用[原教程](https://www.chenxublog.com/2022/10/28/19-9-sms-forwarding-air780e-esp32c3.html)。
 推送通道仅保留 Telegram，另实现 Web 配置面板、远程指令与开机通知。
