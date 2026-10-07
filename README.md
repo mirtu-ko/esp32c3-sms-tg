@@ -39,10 +39,10 @@ preview/       面板离线预览，不下载到设备
 
 | 键 | 含义 | 默认 | 说明 |
 |---|---|---|---|
-| `wifi` | WiFi 列表，按顺序逐个尝试 | `iHome-42` | 仅支持 2.4G；修改后需重启生效 |
+| `wifi` | WiFi 列表，按顺序逐个尝试 | — | 仅支持 2.4G；修改后需重启生效 |
 | `token` | Telegram Bot Token | — | 由 [@BotFather](https://t.me/BotFather) 申请 |
 | `chat` | Telegram Chat ID | — | 由 [@userinfobot](https://t.me/userinfobot) 获取 |
-| `tag` | 短信指令口令 | `ziw` | 仅允许字母、数字与下划线 |
+| `tag` | 短信指令口令 | — | 仅允许字母、数字与下划线 |
 | `pushMax` | 推送重试次数 | `10` | 1–30 |
 | `pushGap` | 重试间隔（毫秒） | `5000` | 500–60000 |
 
